@@ -108,6 +108,9 @@ public final class BukkitStubs {
                     BukkitTask runTaskLater(Plugin plugin, Runnable task, long delay);
                     BukkitTask runTaskTimer(Plugin plugin, Runnable task, long delay, long period);
                     BukkitTask runTaskAsynchronously(Plugin plugin, Runnable task);
+                    int scheduleSyncDelayedTask(Plugin plugin, Runnable task, long delay);
+                    int scheduleSyncDelayedTask(Plugin plugin, Runnable task);
+                    int scheduleSyncRepeatingTask(Plugin plugin, Runnable task, long delay, long period);
                 }
                 """);
 

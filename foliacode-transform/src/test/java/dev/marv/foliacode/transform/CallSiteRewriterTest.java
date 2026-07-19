@@ -83,6 +83,67 @@ class CallSiteRewriterTest {
     }
 
     @Test
+    @DisplayName("rewrites the older scheduleSync spellings, which return an int task id")
+    void rewritesScheduleSyncCalls() throws Exception {
+        Path classes = compile("""
+                package com.example;
+                import org.bukkit.plugin.Plugin;
+                import org.bukkit.scheduler.BukkitScheduler;
+                public class Demo {
+                    public static void schedule(BukkitScheduler scheduler, Plugin plugin, Runnable task) {
+                        scheduler.scheduleSyncDelayedTask(plugin, task, 20L);
+                        scheduler.scheduleSyncDelayedTask(plugin, task);
+                        scheduler.scheduleSyncRepeatingTask(plugin, task, 0L, 20L);
+                    }
+                }
+                """);
+
+        Rewrite rewrite = rewrite(classes, "com.example.Demo");
+
+        assertEquals(3, rewrite.actions().size());
+        assertTrue(rewrite.actions().stream().allMatch(TransformAction::isRewritten),
+                "all three are the same translation as runTaskLater and runTaskTimer");
+
+        // The int task id these return is discarded, so the shim's 0 is unobservable —
+        // but the rewritten class still has to satisfy the verifier, which needs the
+        // replacement to leave an int on the stack exactly where one was before.
+        RecordingHandler handler = new RecordingHandler();
+        Object scheduler = proxy(rewrite.loader(), "org.bukkit.scheduler.BukkitScheduler", handler);
+        Object plugin = proxy(rewrite.loader(), "org.bukkit.plugin.Plugin", handler);
+
+        Method schedule = rewrite.type().getMethod("schedule",
+                rewrite.loader().loadClass("org.bukkit.scheduler.BukkitScheduler"),
+                rewrite.loader().loadClass("org.bukkit.plugin.Plugin"),
+                Runnable.class);
+        schedule.invoke(null, scheduler, plugin, (Runnable) () -> { });
+
+        assertEquals(
+                List.of("scheduleSyncDelayedTask", "scheduleSyncDelayedTask", "scheduleSyncRepeatingTask"),
+                handler.calls(),
+                "each falls back to the method it replaced when no Folia scheduler exists");
+    }
+
+    @Test
+    @DisplayName("refuses a scheduleSync call whose task id is kept")
+    void refusesScheduleSyncWhoseIdIsKept() throws Exception {
+        Path classes = compile("""
+                package com.example;
+                import org.bukkit.plugin.Plugin;
+                import org.bukkit.scheduler.BukkitScheduler;
+                public class Demo {
+                    public static int schedule(BukkitScheduler scheduler, Plugin plugin, Runnable task) {
+                        return scheduler.scheduleSyncDelayedTask(plugin, task, 20L);
+                    }
+                }
+                """);
+
+        Rewrite rewrite = rewrite(classes, "com.example.Demo");
+
+        assertEquals(RefusalReason.RESULT_IS_USED, rewrite.actions().get(0).refusal(),
+                "a kept task id is used to cancel later, and Folia issues no such id");
+    }
+
+    @Test
     @DisplayName("refuses when the scheduler's result is used")
     void refusesWhenResultIsUsed() throws Exception {
         Path classes = compile("""

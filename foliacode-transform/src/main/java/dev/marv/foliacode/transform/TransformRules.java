@@ -146,6 +146,34 @@ public final class TransformRules {
                 "Runs the repeating task on the global region scheduler",
                 TICK_CAVEAT));
 
+        // The older spelling of the same two calls. Real plugins are full of them —
+        // EssentialsX reaches for scheduleSyncDelayedTask where newer code would write
+        // runTaskLater — and leaving them out would refuse a call this tool can already
+        // translate, purely because of its name.
+        rules.add(new TransformRule(
+                SCHEDULER, "scheduleSyncDelayedTask",
+                "(Lorg/bukkit/plugin/Plugin;Ljava/lang/Runnable;J)I",
+                SCHEDULER_SHIM, "scheduleSyncDelayedTask",
+                "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Runnable;J)I",
+                "Runs the delayed task on the global region scheduler",
+                TICK_CAVEAT));
+
+        rules.add(new TransformRule(
+                SCHEDULER, "scheduleSyncDelayedTask",
+                "(Lorg/bukkit/plugin/Plugin;Ljava/lang/Runnable;)I",
+                SCHEDULER_SHIM, "scheduleSyncDelayedTask",
+                "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Runnable;)I",
+                "Runs the task on the global region scheduler",
+                null));
+
+        rules.add(new TransformRule(
+                SCHEDULER, "scheduleSyncRepeatingTask",
+                "(Lorg/bukkit/plugin/Plugin;Ljava/lang/Runnable;JJ)I",
+                SCHEDULER_SHIM, "scheduleSyncRepeatingTask",
+                "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Runnable;JJ)I",
+                "Runs the repeating task on the global region scheduler",
+                TICK_CAVEAT));
+
         rules.add(new TransformRule(
                 SCHEDULER, "runTaskAsynchronously",
                 "(Lorg/bukkit/plugin/Plugin;Ljava/lang/Runnable;)Lorg/bukkit/scheduler/BukkitTask;",

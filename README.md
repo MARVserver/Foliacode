@@ -226,6 +226,7 @@ The original JAR is never modified — the output is a new file beside it.
 | Rewritten | Into |
 |---|---|
 | `BukkitScheduler.runTask` / `runTaskLater` / `runTaskTimer` | `GlobalRegionScheduler` |
+| `BukkitScheduler.scheduleSyncDelayedTask` / `scheduleSyncRepeatingTask` | `GlobalRegionScheduler` |
 | `BukkitScheduler.runTaskAsynchronously` | `AsyncScheduler` |
 | `Entity.teleport(Location)` | `teleportAsync(Location)` |
 
