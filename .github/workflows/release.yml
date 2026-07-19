@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build the release from (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Work out the version
+        id: version
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+          # A tag that disagrees with the version in the build would produce a release
+          # whose assets are named differently from the thing being released. Better to
+          # stop here than to publish a mismatched pair.
+          built=$(./gradlew properties --no-daemon -q | awk '/^version:/ {print $2}')
+          echo "tag says ${version}, build says ${built}"
+          if [ "${version}" != "${built}" ]; then
+            echo "::error::Tag ${tag} does not match the project version ${built}"
+            exit 1
+          fi
+
+      # The release is built from the same green build the CI workflow runs, not from a
+      # separate shortcut path. A release that skipped the tests would be worth less
+      # than no release.
+      - name: Build and test
+        run: ./gradlew build --no-daemon
+
+      - name: Build the runnable JAR
+        run: ./gradlew :foliacode-cli:fatJar --no-daemon
+
+      - name: Publish to GitHub Packages
+        run: ./gradlew publish --no-daemon
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Collect the release assets
+        id: assets
+        run: |
+          mkdir -p release
+          cp foliacode-cli/build/libs/*-all.jar \
+             "release/foliacode-${{ steps.version.outputs.version }}.jar"
+          cd release
+          sha256sum ./*.jar > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            release/foliacode-${{ steps.version.outputs.version }}.jar \
+            release/SHA256SUMS \
+            --title "FoliaCode ${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            --notes-file - <<'NOTES'
+          Folia compatibility analyzer for Bukkit plugins.
+
+          ## Install
+
+          Requires Java 21+. Download the JAR below, then:
+
+          ```bash
+          alias foliacode='java -jar /path/to/foliacode-${{ steps.version.outputs.version }}.jar'
+          ```
+
+          Verify the download against `SHA256SUMS`.
+
+          ## What it does
+
+          ```bash
+          foliacode analyze MyPlugin.jar            # static analysis, offline, no side effects
+          foliacode verify MyPlugin.jar --yes       # boot a real Folia server and watch it load
+          foliacode verify MyPlugin.jar --yes --instrument   # ...and record what actually runs
+          foliacode transform MyPlugin.jar --dry-run         # what a rewrite would change
+          ```
+
+          `analyze` is always safe. `verify` downloads and executes a Folia server jar, so
+          it is opt-in. `transform` never modifies the input JAR.
+
+          A clean report is not a proof of safety: static analysis cannot follow reflection.
+
+          ## Maven
+
+          The modules are published to GitHub Packages under `dev.marv.foliacode`.
+
+          ```kotlin
+          dependencies {
+              implementation("dev.marv.foliacode:foliacode-core:${{ steps.version.outputs.version }}")
+          }
+          ```
+          NOTES
+
+      - name: Upload the build reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-results
+          path: '**/build/reports/tests/'
+          retention-days: 30

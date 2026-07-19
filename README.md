@@ -105,17 +105,46 @@ produces a confident, wrong "nothing found". FoliaCode unpacks one level deep.
 
 Requires Java 21+.
 
+Download the runnable JAR from [Releases](https://github.com/MARVserver/Foliacode/releases),
+check it against the published `SHA256SUMS`, and give it a name you can type:
+
+```bash
+alias foliacode='java -jar /path/to/foliacode-0.1.0.jar'
+```
+
+Or build it yourself:
+
 ```bash
 git clone https://github.com/MARVserver/Foliacode.git
 cd Foliacode
 ./gradlew :foliacode-cli:fatJar
 ```
 
-The runnable JAR lands in `foliacode-cli/build/libs/`. For convenience:
+The runnable JAR lands in `foliacode-cli/build/libs/`.
 
-```bash
-alias foliacode='java -jar /path/to/foliacode-cli-0.1.0-all.jar'
+### As a library
+
+The modules are published to GitHub Packages. `foliacode-core` is the analysis
+engine; the others are only needed if you want the server sandbox, the runtime
+agent, or the rewriter.
+
+```kotlin
+repositories {
+    maven("https://maven.pkg.github.com/MARVserver/Foliacode") {
+        credentials {
+            username = providers.gradleProperty("gpr.user").orNull
+            password = providers.gradleProperty("gpr.token").orNull
+        }
+    }
+}
+
+dependencies {
+    implementation("dev.marv.foliacode:foliacode-core:0.1.0")
+}
 ```
+
+GitHub Packages requires authentication even for public packages, so a token with
+`read:packages` is needed either way.
 
 ---
 
