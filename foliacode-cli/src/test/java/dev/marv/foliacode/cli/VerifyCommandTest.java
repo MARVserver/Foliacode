@@ -97,6 +97,38 @@ class VerifyCommandTest {
     }
 
     @Test
+    @DisplayName("--instrument writes its reports outside the sandbox that gets deleted")
+    void agentReportPathsAreAbsolute() {
+        // Regression: these were relative, and the agent resolves them inside the server
+        // process, whose working directory is the throwaway sandbox. The reports were
+        // written and then deleted along with it, and the run reported that the agent
+        // had produced nothing.
+        VerifyCommand.AgentAttachment attachment = VerifyCommand.attachAgent(
+                Path.of("/opt/foliacode.jar"), Path.of("."), "MyPlugin", "com.example");
+
+        assertTrue(attachment.textReport().isAbsolute(), attachment.textReport().toString());
+        assertTrue(attachment.jsonReport().isAbsolute(), attachment.jsonReport().toString());
+        assertTrue(attachment.jvmOption().contains("text=" + attachment.textReport()),
+                attachment.jvmOption());
+        assertTrue(attachment.jvmOption().contains("report=" + attachment.jsonReport()),
+                attachment.jvmOption());
+        assertTrue(attachment.jvmOption().startsWith("-javaagent:/opt/foliacode.jar="),
+                attachment.jvmOption());
+        assertTrue(attachment.jvmOption().contains(",include=com.example"),
+                attachment.jvmOption());
+    }
+
+    @Test
+    @DisplayName("--instrument watches everything when the plugin declares no main package")
+    void agentInstrumentsEverythingWithoutAPackage() {
+        VerifyCommand.AgentAttachment attachment = VerifyCommand.attachAgent(
+                Path.of("/opt/foliacode.jar"), Path.of("."), "MyPlugin", null);
+
+        assertFalse(attachment.jvmOption().contains("include="),
+                "an absent filter must be omitted, not sent as an empty one");
+    }
+
+    @Test
     @DisplayName("--with collects every dependency jar given")
     void collectsExtraPlugins() {
         VerifyCommand.VerifyOptions options = VerifyCommand.VerifyOptions.parse(new String[]{

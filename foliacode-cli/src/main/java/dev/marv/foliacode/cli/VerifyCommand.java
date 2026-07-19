@@ -110,13 +110,11 @@ final class VerifyCommand {
                         + "JAR. Build it with ./gradlew :foliacode-cli:fatJar and run that.");
                 return EXIT_ERROR;
             }
-            runtimeReport = baseDir.resolve(pluginName + "-runtime.txt");
             String include = AgentCommand.readMainPackage(options.pluginJar());
-            jvmOptions = List.of("-javaagent:" + agentJar + "="
-                    + "report=" + baseDir.resolve(pluginName + "-runtime.json")
-                    + ",text=" + runtimeReport
-                    + (include == null ? "" : ",include=" + include)
-                    + ",quiet=true");
+            AgentAttachment attachment = attachAgent(agentJar, baseDir, pluginName, include);
+            runtimeReport = attachment.textReport();
+            jvmOptions = List.of(attachment.jvmOption());
+
             out.println("Instrumenting the plugin to record what actually runs"
                     + (include == null ? "." : ", watching " + include + "."));
             out.println();
@@ -148,11 +146,49 @@ final class VerifyCommand {
     }
 
     /**
+     * Works out where the agent writes and how it is attached.
+     *
+     * <p>Both paths are made absolute. The agent resolves them inside the server
+     * process, whose working directory is the sandbox — and the sandbox is deleted
+     * when the run ends. A relative path would put the report in the one directory
+     * guaranteed to be gone by the time anybody looks for it.</p>
+     *
+     * @param agentJar   the JAR carrying the agent
+     * @param baseDir    the directory the reports belong in
+     * @param pluginName the plugin's declared name, used to name the files
+     * @param include    package prefix to instrument, or {@code null} for everything
+     * @return where the reports go and the {@code -javaagent} argument to pass
+     */
+    static AgentAttachment attachAgent(
+            Path agentJar, Path baseDir, String pluginName, String include) {
+        Path textReport = baseDir.resolve(pluginName + "-runtime.txt").toAbsolutePath();
+        Path jsonReport = baseDir.resolve(pluginName + "-runtime.json").toAbsolutePath();
+        String jvmOption = "-javaagent:" + agentJar + "="
+                + "report=" + jsonReport
+                + ",text=" + textReport
+                + (include == null ? "" : ",include=" + include)
+                + ",quiet=true";
+        return new AgentAttachment(textReport, jsonReport, jvmOption);
+    }
+
+    /**
+     * Where the runtime agent writes, and how it is attached.
+     *
+     * @param textReport where the readable report goes
+     * @param jsonReport where the machine-readable report goes
+     * @param jvmOption  the {@code -javaagent} argument for the server JVM
+     */
+    record AgentAttachment(Path textReport, Path jsonReport, String jvmOption) {
+    }
+
+    /**
      * Prints what the runtime agent observed, if it produced anything.
      *
-     * <p>The agent writes its report from a shutdown hook. A server killed rather than
-     * stopped never reaches it, so a missing file is reported as a missing file rather
-     * than as an absence of findings.</p>
+     * <p>The agent writes its report from a shutdown hook, so a server that was killed
+     * rather than stopped leaves no file behind. That is one possible cause among
+     * several, and it is offered as such: naming a single reason for a missing file
+     * this code cannot actually distinguish would be inventing a diagnosis, which is
+     * the failure this tool exists to avoid.</p>
      *
      * @param reportPath where the agent was told to write
      * @param out        standard output
@@ -161,8 +197,9 @@ final class VerifyCommand {
         out.println();
         try {
             if (!Files.isRegularFile(reportPath)) {
-                out.println("The runtime agent produced no report. The server did not shut down "
-                        + "cleanly enough to write one.");
+                out.println("The runtime agent wrote no report at " + reportPath + ".");
+                out.println("Either nothing in the plugin was instrumented, or the server did");
+                out.println("not reach its shutdown hook.");
                 return;
             }
             out.print(Files.readString(reportPath));

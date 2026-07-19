@@ -1,6 +1,7 @@
 package dev.marv.foliacode.agent;
 
 import dev.marv.foliacode.model.UnsafeApi;
+import dev.marv.foliacode.probe.Probe;
 import dev.marv.foliacode.rules.TypeHierarchy;
 import dev.marv.foliacode.rules.UnsafeApiRegistry;
 import org.objectweb.asm.ClassReader;
@@ -26,9 +27,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Weaves a counter into every call site the rule set flags.
  *
  * <p>The injected sequence is two instructions placed immediately before the call:
- * push the site id, then {@code invokestatic RuntimeRecorder.observe(int)}. It is
- * stack-neutral, introduces no locals and no branches, so the method's existing
- * stack map frames stay valid and only {@code maxStack} has to grow.</p>
+ * push the site id, then {@code invokestatic Probe.observe(int)}. It is stack-neutral,
+ * introduces no locals and no branches, so the method's existing stack map frames stay
+ * valid and only {@code maxStack} has to grow.</p>
  *
  * <p>That last point is why the writer uses {@link ClassWriter#COMPUTE_MAXS} and not
  * {@code COMPUTE_FRAMES}. Computing frames makes ASM resolve common supertypes,
@@ -44,7 +45,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 final class InstrumentingTransformer implements ClassFileTransformer {
 
-    private static final String RECORDER = "dev/marv/foliacode/agent/RuntimeRecorder";
+    /**
+     * The woven call target.
+     *
+     * <p>{@code Probe}, not {@code RuntimeRecorder}: this is the class published to the
+     * bootstrap loader, and therefore the only one an isolated plugin loader is
+     * guaranteed to resolve.</p>
+     */
+    private static final String PROBE = "dev/marv/foliacode/probe/Probe";
 
     /**
      * Packages that are never instrumented.
@@ -108,7 +116,14 @@ final class InstrumentingTransformer implements ClassFileTransformer {
             if (!shouldInstrument(loader, className)) {
                 return null;
             }
-            return instrument(classfileBuffer);
+            byte[] instrumented = instrument(classfileBuffer);
+            if (instrumented != null) {
+                // This loader just gave us a class that calls the server API, so it can
+                // see the server API — which is more than can be said for the system
+                // loader on Paper.
+                Probe.rememberLoader(loader);
+            }
+            return instrumented;
         } catch (Throwable t) {
             // Returning null leaves the class exactly as it was. A plugin that loads
             // without its counters is a lesser failure than a plugin that will not load.
@@ -215,7 +230,7 @@ final class InstrumentingTransformer implements ClassFileTransformer {
                     currentLine, call.owner, match.get());
             instructions.insertBefore(insn, new LdcInsnNode(siteId));
             instructions.insertBefore(insn,
-                    new MethodInsnNode(Opcodes.INVOKESTATIC, RECORDER, "observe", "(I)V", false));
+                    new MethodInsnNode(Opcodes.INVOKESTATIC, PROBE, "observe", "(I)V", false));
             woven++;
         }
         return woven;
