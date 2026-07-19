@@ -1,0 +1,23 @@
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+
+*.class
+*.log
+.DS_Store
+
+# Plugin JARs fetched for analysis are not committed
+corpus/*.jar
+
+# Tooling state
+.omc/
+.claude/

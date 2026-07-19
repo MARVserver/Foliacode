@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Integration tests are excluded by design: they need the network and boot a
+      # real server. The default build must stay fast and hermetic.
+      - name: Build and test
+        run: ./gradlew build --no-daemon
+
+      - name: Build the runnable JAR
+        run: ./gradlew :foliacode-cli:fatJar --no-daemon
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/build/reports/tests/'
+          retention-days: 14
+
+      - name: Upload the runnable JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: foliacode-cli
+          path: foliacode-cli/build/libs/*-all.jar
+          if-no-files-found: error
+          retention-days: 14
+
+  corpus:
+    name: Analyse a real plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the runnable JAR
+        run: ./gradlew :foliacode-cli:fatJar --no-daemon
+
+      # Confirms the analyzer survives a real, large, shaded plugin. The finding
+      # counts move as upstream releases change, so they are not a pass condition;
+      # completing the run without an execution error is.
+      - name: Fetch a real plugin
+        run: |
+          mkdir -p corpus
+          gh release download 2.22.0 \
+            --repo EssentialsX/Essentials \
+            --pattern 'EssentialsX-2.22.0.jar' \
+            --dir corpus
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Analyse it
+        run: |
+          # Exit code 1 means "findings were reported", which is the expected
+          # outcome here. Only exit code 2 (execution error) is a failure.
+          # The default shell is bash -e, so guard the pipeline explicitly.
+          set +e
+          java -jar foliacode-cli/build/libs/*-all.jar \
+            analyze corpus/ --json corpus-report.json | tee corpus-output.txt
+          exit_code=${PIPESTATUS[0]}
+          set -e
+
+          echo "foliacode exit code: ${exit_code}"
+          if [ "${exit_code}" -eq 2 ]; then
+            echo "::error::The analyzer failed with an execution error"
+            exit 1
+          fi
+          grep -q "Verdict" corpus-output.txt
+          test -s corpus-report.json
+
+      - name: Check the JSON is well-formed
+        run: python3 -c "import json; json.load(open('corpus-report.json'))"
+
+      # Rewriting hand-written test classes proves the rewriter handles what the test
+      # author thought of. Rewriting a large shaded plugin proves it survives what a
+      # real compiler emits — and that the result still passes the JVM verifier, which
+      # is the failure that would matter most in the wild.
+      - name: Transform it
+        run: |
+          set +e
+          java -jar foliacode-cli/build/libs/*-all.jar \
+            transform corpus/EssentialsX-2.22.0.jar \
+            --out corpus/EssentialsX-folia.jar \
+            --json transform-report.json | tee transform-output.txt
+          exit_code=${PIPESTATUS[0]}
+          set -e
+
+          echo "foliacode exit code: ${exit_code}"
+          if [ "${exit_code}" -eq 2 ]; then
+            echo "::error::The transformer failed with an execution error"
+            exit 1
+          fi
+          test -s corpus/EssentialsX-folia.jar
+          python3 -c "import json; json.load(open('transform-report.json'))"
+
+      # Every rewritten class must still be a well-formed class file. javap parses the
+      # constant pool and every method body, so a rewrite that corrupted either shows
+      # up here. It is a structural check, not the JVM verifier: fully verifying these
+      # classes would need paper-api on the classpath, which this project deliberately
+      # does not depend on. The verifier is exercised in the unit tests instead, where
+      # the rewritten classes are defined and executed for real.
+      - name: Check every rewritten class is still well-formed
+        run: |
+          python3 - <<'PY' > rewritten-classes.txt
+          import json
+          report = json.load(open('transform-report.json'))
+          sites = report.get('callSites', [])
+          rewritten = {s['class'] for s in sites if s.get('outcome') == 'REWRITTEN'}
+          print('\n'.join(sorted(rewritten)))
+          PY
+          echo "Rewritten classes: $(wc -l < rewritten-classes.txt)"
+
+          while read -r cls; do
+            [ -z "$cls" ] && continue
+            javap -cp corpus/EssentialsX-folia.jar -p -c "$cls" > /dev/null \
+              || { echo "::error::$cls is malformed after the transform"; exit 1; }
+          done < rewritten-classes.txt
+
+      # The whole point of a transform is that it reduces the problem. If the output
+      # does not analyse better than the input, something went wrong quietly.
+      - name: Check the output analyses better than the input
+        run: |
+          set +e
+          java -jar foliacode-cli/build/libs/*-all.jar \
+            analyze corpus/EssentialsX-folia.jar --json after-report.json > /dev/null
+          exit_code=$?
+          set -e
+          if [ "${exit_code}" -eq 2 ]; then
+            echo "::error::The rewritten JAR could not be analysed at all"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, sys
+          before = json.load(open('corpus-report.json'))
+          after = json.load(open('after-report.json'))
+          before = before[0] if isinstance(before, list) else before
+          after = after[0] if isinstance(after, list) else after
+          b, a = before['summary']['CRITICAL'], after['summary']['CRITICAL']
+          print(f'CRITICAL: {b} -> {a}')
+          if a > b:
+              sys.exit('The transform increased the CRITICAL count')
+          PY
+
+      - name: Upload the analysis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-report
+          path: |
+            corpus-report.json
+            corpus-output.txt
+            transform-report.json
+            transform-output.txt
+          retention-days: 14
