@@ -12,6 +12,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.file.Path;
@@ -20,8 +21,10 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -127,6 +130,55 @@ class InstrumentingTransformerTest {
         // No Bukkit on this classpath, so the server cannot be asked. It must say so
         // rather than assume an answer.
         assertEquals(ThreadVerdict.UNKNOWN, thread.verdict());
+    }
+
+    @Test
+    @DisplayName("woven code needs the recorder visible from an isolated plugin loader")
+    void wovenCodeNeedsTheRecorderOnAnIsolatedLoader() throws Exception {
+        // Regression, found by booting a real Folia server. Paper gives each plugin an
+        // isolated loader that does not delegate dev.marv.foliacode upwards, so the woven
+        // invokestatic failed to link and killed the plugin with a NoClassDefFoundError —
+        // the agent breaking the very thing it was meant to observe. In production the
+        // fix is to publish the recorder to the bootstrap loader; this reproduces the
+        // condition that made it necessary.
+        Path classes = compile("""
+                package com.example;
+                import org.bukkit.Material;
+                import org.bukkit.block.Block;
+                public class Plugin {
+                    public static void touch(Block block) {
+                        block.setType(Material.STONE);
+                    }
+                }
+                """);
+
+        InstrumentingTransformer transformer =
+                new InstrumentingTransformer(new UnsafeApiRegistry(), List.of("com/example"));
+
+        // A loader that can see the stubs but hides the probe, the way Paper's plugin
+        // loader hides anything on the system class path from the plugin. In production
+        // the probe is published to the bootstrap loader, which no loader can hide;
+        // this is what that publication is protecting against.
+        ClassLoader isolating = new ClassLoader(getClass().getClassLoader()) {
+            @Override
+            protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+                if (name.startsWith("dev.marv.foliacode.probe.")) {
+                    throw new ClassNotFoundException(name);
+                }
+                return super.loadClass(name, resolve);
+            }
+        };
+        TransformingClassLoader loader =
+                new TransformingClassLoader(classes, transformer, isolating);
+
+        Class<?> blockType = loader.loadClass("org.bukkit.block.Block");
+        Object block = Proxy.newProxyInstance(loader, new Class<?>[]{blockType}, NO_OP);
+        Method touch = loader.loadClass("com.example.Plugin").getMethod("touch", blockType);
+
+        InvocationTargetException failure = assertThrows(InvocationTargetException.class,
+                () -> touch.invoke(null, block));
+        assertInstanceOf(NoClassDefFoundError.class, failure.getCause(),
+                "this is exactly the failure a real Paper server produced");
     }
 
     @Test

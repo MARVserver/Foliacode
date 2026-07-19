@@ -109,7 +109,7 @@ Download the runnable JAR from [Releases](https://github.com/MARVserver/Foliacod
 check it against the published `SHA256SUMS`, and give it a name you can type:
 
 ```bash
-alias foliacode='java -jar /path/to/foliacode-0.1.0.jar'
+alias foliacode='java -jar /path/to/foliacode-0.2.0.jar'
 ```
 
 Or build it yourself:
@@ -139,7 +139,7 @@ repositories {
 }
 
 dependencies {
-    implementation("dev.marv.foliacode:foliacode-core:0.1.0")
+    implementation("dev.marv.foliacode:foliacode-core:0.2.0")
 }
 ```
 
@@ -192,6 +192,7 @@ This catches what bytecode cannot show you:
 | `--memory <MB>` | Server heap (default `1024`) |
 | `--timeout <sec>` | How long to wait for boot (default `180`) |
 | `--with <jar>` | Install a dependency plugin alongside; repeatable |
+| `--instrument` | Attach the runtime agent and report what actually ran |
 | `--keep-server` | Keep the sandbox directory for inspection |
 
 **It is opt-in on purpose.** It downloads and executes third-party code, so it never
