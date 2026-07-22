@@ -40,12 +40,17 @@ public final class BukkitStubs {
 
         sources.put("org.bukkit.World", """
                 package org.bukkit;
+                import java.util.List;
                 import org.bukkit.block.Block;
                 import org.bukkit.entity.Entity;
+                import org.bukkit.entity.LivingEntity;
                 public interface World {
                     Block getBlockAt(int x, int y, int z);
                     Object getChunkAt(int x, int z);
                     Entity spawnEntity(Location location, String type);
+                    List<Entity> getEntities();
+                    List<LivingEntity> getLivingEntities();
+                    List<Entity> getNearbyEntities(Location location, double x, double y, double z);
                 }
                 """);
 
@@ -81,7 +86,9 @@ public final class BukkitStubs {
 
         sources.put("org.bukkit.entity.Player", """
                 package org.bukkit.entity;
-                public interface Player extends HumanEntity { }
+                public interface Player extends HumanEntity {
+                    void kickPlayer(String message);
+                }
                 """);
 
         sources.put("org.bukkit.plugin.Plugin", """
@@ -124,12 +131,33 @@ public final class BukkitStubs {
                 }
                 """);
 
+        sources.put("org.bukkit.Server", """
+                package org.bukkit;
+                import org.bukkit.command.CommandSender;
+                public interface Server {
+                    World createWorld(Object creator);
+                    boolean unloadWorld(String name, boolean save);
+                    boolean dispatchCommand(CommandSender sender, String commandLine);
+                    void shutdown();
+                }
+                """);
+
+        sources.put("org.bukkit.command.CommandSender", """
+                package org.bukkit.command;
+                public interface CommandSender { }
+                """);
+
         sources.put("org.bukkit.Bukkit", """
                 package org.bukkit;
+                import org.bukkit.command.CommandSender;
                 import org.bukkit.scheduler.BukkitScheduler;
                 public final class Bukkit {
                     public static BukkitScheduler getScheduler() { return null; }
+                    public static Server getServer() { return null; }
                     public static World createWorld(Object creator) { return null; }
+                    public static boolean dispatchCommand(CommandSender sender, String commandLine) {
+                        return false;
+                    }
                 }
                 """);
 

@@ -126,6 +126,33 @@ class ClassScannerTest {
     }
 
     @Test
+    @DisplayName("detects createWorld reached through getServer() — owner is Server, not Bukkit")
+    void detectsWorldCreationThroughServer(@TempDir Path tempDir) throws IOException {
+        // Plugins reach world creation two ways: Bukkit.createWorld(...) and the far more
+        // common getServer().createWorld(...). The latter has call owner org/bukkit/Server,
+        // so a rule that only knew about org/bukkit/Bukkit would miss it entirely.
+        List<Finding> findings = scan(tempDir, "example.Worlds", """
+                package example;
+                import org.bukkit.Bukkit;
+                public class Worlds {
+                    public void build() {
+                        Bukkit.getServer().createWorld(null);
+                    }
+                }
+                """);
+
+        List<Finding> creation = findings.stream()
+                .filter(f -> f.api().displayName().equals("Server.createWorld"))
+                .toList();
+
+        assertEquals(1, creation.size(),
+                "createWorld through getServer() should be detected. Actual findings: " + findings);
+        Finding finding = creation.get(0);
+        assertEquals(Severity.CRITICAL, finding.severity());
+        assertEquals("org/bukkit/Server", finding.calleeOwner());
+    }
+
+    @Test
     @DisplayName("finds nothing in a clean class")
     void ignoresCleanClass(@TempDir Path tempDir) throws IOException {
         List<Finding> findings = scan(tempDir, "example.Clean", """
