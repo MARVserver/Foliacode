@@ -33,11 +33,13 @@ public final class UnsafeApiRegistry {
     private static final String SCHEDULER = "org/bukkit/scheduler/BukkitScheduler";
     private static final String RUNNABLE = "org/bukkit/scheduler/BukkitRunnable";
     private static final String BUKKIT = "org/bukkit/Bukkit";
+    private static final String SERVER = "org/bukkit/Server";
     private static final String BLOCK = "org/bukkit/block/Block";
     private static final String BLOCK_STATE = "org/bukkit/block/BlockState";
     private static final String ENTITY = "org/bukkit/entity/Entity";
     private static final String LIVING_ENTITY = "org/bukkit/entity/LivingEntity";
     private static final String HUMAN_ENTITY = "org/bukkit/entity/HumanEntity";
+    private static final String PLAYER = "org/bukkit/entity/Player";
     private static final String WORLD = "org/bukkit/World";
     private static final String CHUNK = "org/bukkit/Chunk";
     private static final String INVENTORY = "org/bukkit/inventory/Inventory";
@@ -198,14 +200,20 @@ public final class UnsafeApiRegistry {
         // ================================================================
         // World creation and management — Folia has no dynamic world support
         // ================================================================
-        rules.add(new UnsafeApi(BUKKIT, "createWorld", null, Category.WORLDGEN,
-                Severity.CRITICAL,
-                "Folia cannot create worlds at runtime",
-                "Create the world before startup and look it up instead"));
-        rules.add(new UnsafeApi(BUKKIT, "unloadWorld", null, Category.WORLDGEN,
-                Severity.CRITICAL,
-                "Folia cannot unload worlds at runtime",
-                "Manage world lifecycle through server configuration rather than from the plugin"));
+        // Both owners matter: plugins reach these through the Bukkit facade
+        // (Bukkit.createWorld) and through the Server interface
+        // (getServer().createWorld). Covering only the facade would let every
+        // getServer()-routed call slip through, which is the more common spelling.
+        for (String serverOwner : List.of(BUKKIT, SERVER)) {
+            rules.add(new UnsafeApi(serverOwner, "createWorld", null, Category.WORLDGEN,
+                    Severity.CRITICAL,
+                    "Folia cannot create worlds at runtime",
+                    "Create the world before startup and look it up instead"));
+            rules.add(new UnsafeApi(serverOwner, "unloadWorld", null, Category.WORLDGEN,
+                    Severity.CRITICAL,
+                    "Folia cannot unload worlds at runtime",
+                    "Manage world lifecycle through server configuration rather than from the plugin"));
+        }
         rules.add(new UnsafeApi(WORLD_CREATOR, UnsafeApi.ANY_METHOD, null, Category.WORLDGEN,
                 Severity.MEDIUM,
                 "WorldCreator exists to build worlds at runtime, which Folia does not support",
@@ -260,6 +268,28 @@ public final class UnsafeApiRegistry {
                 "Changing an entity's velocity is only allowed from the region that owns it",
                 "Run it through that entity's EntityScheduler"));
 
+        // The rest of the region-owned entity mutations. They share one rule with
+        // teleport/remove/damage: an entity may only be changed from the region that
+        // currently owns it, so a call from anywhere else is a thread-safety violation.
+        String entityMutationReason =
+                "Mutating an entity is only allowed from the region that currently owns it";
+        String entityMutationRemedy =
+                "Run it through that entity's EntityScheduler: "
+                        + "entity.getScheduler().run(plugin, task -> ..., null)";
+        for (String method : List.of("setFireTicks", "addPassenger", "removePassenger",
+                "leaveVehicle")) {
+            rules.add(new UnsafeApi(ENTITY, method, null, Category.ENTITY,
+                    Severity.HIGH, entityMutationReason, entityMutationRemedy));
+        }
+        for (String method : List.of("addPotionEffect", "removePotionEffect")) {
+            rules.add(new UnsafeApi(LIVING_ENTITY, method, null, Category.ENTITY,
+                    Severity.HIGH, entityMutationReason, entityMutationRemedy));
+        }
+        rules.add(new UnsafeApi(PLAYER, "kickPlayer", null, Category.ENTITY,
+                Severity.HIGH,
+                "Disconnecting a player has to happen on the region that owns them",
+                "Run it through the player's EntityScheduler"));
+
         // ================================================================
         // Worlds and chunks
         // ================================================================
@@ -295,6 +325,20 @@ public final class UnsafeApiRegistry {
                 "Reading a block from outside its owning region can return inconsistent state",
                 "Read from inside the owning region, or fetch the value through RegionScheduler"));
 
+        // A world-wide entity lookup walks entities owned by every region in the
+        // world at once, so it races with those regions ticking — the same hazard
+        // as Entity.getNearbyEntities, one scope wider.
+        String worldEntityScanReason =
+                "A world-wide entity lookup traverses entities owned by every region "
+                        + "in the world, racing with those regions as they tick";
+        String worldEntityScanRemedy =
+                "Keep the query inside a single region, or gather the result on each "
+                        + "region's own thread through RegionScheduler";
+        for (String method : List.of("getEntities", "getLivingEntities", "getNearbyEntities")) {
+            rules.add(new UnsafeApi(WORLD, method, null, Category.ENTITY,
+                    Severity.HIGH, worldEntityScanReason, worldEntityScanRemedy));
+        }
+
         // ================================================================
         // Inventories
         // ================================================================
@@ -316,15 +360,25 @@ public final class UnsafeApiRegistry {
         // ================================================================
         // Server-wide — operations that span regions
         // ================================================================
-        rules.add(new UnsafeApi(BUKKIT, "getOnlinePlayers", null, Category.SERVER,
-                Severity.INFO,
-                "Online players are spread across regions, so iterating the returned "
-                        + "collection and acting on each one crosses region boundaries",
-                "Dispatch the work to each player's EntityScheduler individually"));
-        rules.add(new UnsafeApi(BUKKIT, "shutdown", null, Category.SERVER,
-                Severity.MEDIUM,
-                "Shutting the server down has to happen on the global region",
-                "Run it through GlobalRegionScheduler"));
+        // Covered on both owners, since plugins reach the server through the
+        // Bukkit facade and through the Server interface interchangeably.
+        for (String serverOwner : List.of(BUKKIT, SERVER)) {
+            rules.add(new UnsafeApi(serverOwner, "getOnlinePlayers", null, Category.SERVER,
+                    Severity.INFO,
+                    "Online players are spread across regions, so iterating the returned "
+                            + "collection and acting on each one crosses region boundaries",
+                    "Dispatch the work to each player's EntityScheduler individually"));
+            rules.add(new UnsafeApi(serverOwner, "shutdown", null, Category.SERVER,
+                    Severity.MEDIUM,
+                    "Shutting the server down has to happen on the global region",
+                    "Run it through GlobalRegionScheduler"));
+            rules.add(new UnsafeApi(serverOwner, "dispatchCommand", null, Category.SERVER,
+                    Severity.MEDIUM,
+                    "Dispatching a command runs its handler on the calling thread, and most "
+                            + "commands touch worlds or entities that belong to a specific region",
+                    "Dispatch it from the region that owns what the command affects, "
+                            + "for example inside RegionScheduler.execute(...)"));
+        }
 
         // ================================================================
         // Reflection — make the limits of static analysis explicit

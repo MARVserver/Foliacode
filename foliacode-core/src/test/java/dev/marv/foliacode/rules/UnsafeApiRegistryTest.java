@@ -43,6 +43,65 @@ class UnsafeApiRegistryTest {
     }
 
     @Test
+    @DisplayName("flags world creation through the Server interface, not just the Bukkit facade")
+    void matchesWorldCreationThroughServer() {
+        Optional<UnsafeApi> match = registry.match(
+                "org/bukkit/Server", "createWorld",
+                "(Lorg/bukkit/WorldCreator;)Lorg/bukkit/World;", hierarchy);
+
+        assertTrue(match.isPresent(),
+                "getServer().createWorld(...) is the common spelling and must be caught");
+        assertEquals(Severity.CRITICAL, match.get().severity());
+        assertEquals(Category.WORLDGEN, match.get().category());
+    }
+
+    @Test
+    @DisplayName("flags dispatchCommand on both the Bukkit facade and the Server interface")
+    void matchesDispatchCommandOnBothOwners() {
+        for (String owner : List.of("org/bukkit/Bukkit", "org/bukkit/Server")) {
+            Optional<UnsafeApi> match = registry.match(owner, "dispatchCommand", "()Z", hierarchy);
+            assertTrue(match.isPresent(), owner + ".dispatchCommand should be flagged");
+            assertEquals(Severity.MEDIUM, match.get().severity());
+            assertEquals(Category.SERVER, match.get().category());
+        }
+    }
+
+    @Test
+    @DisplayName("flags kicking a player as a region-owned mutation")
+    void matchesKickPlayer() {
+        Optional<UnsafeApi> match = registry.match(
+                "org/bukkit/entity/Player", "kickPlayer", "(Ljava/lang/String;)V", hierarchy);
+
+        assertTrue(match.isPresent());
+        assertEquals(Severity.HIGH, match.get().severity());
+        assertEquals(Category.ENTITY, match.get().category());
+    }
+
+    @Test
+    @DisplayName("flags a potion-effect change through an entity subtype")
+    void matchesPotionEffectThroughSubtype() {
+        Optional<UnsafeApi> match = registry.match(
+                "org/bukkit/entity/Player", "addPotionEffect",
+                "(Lorg/bukkit/potion/PotionEffect;)Z", hierarchy);
+
+        assertTrue(match.isPresent(),
+                "Player.addPotionEffect should match the LivingEntity rule via the hierarchy");
+        assertEquals("org/bukkit/entity/LivingEntity", match.get().owner());
+        assertEquals(Severity.HIGH, match.get().severity());
+    }
+
+    @Test
+    @DisplayName("flags a world-wide entity lookup as HIGH")
+    void matchesWorldEntityTraversal() {
+        Optional<UnsafeApi> match = registry.match(
+                "org/bukkit/World", "getEntities", "()Ljava/util/List;", hierarchy);
+
+        assertTrue(match.isPresent());
+        assertEquals(Severity.HIGH, match.get().severity());
+        assertEquals(Category.ENTITY, match.get().category());
+    }
+
+    @Test
     @DisplayName("does not match unrelated calls")
     void doesNotMatchUnrelatedCalls() {
         assertTrue(registry.match("java/util/List", "add", "(Ljava/lang/Object;)Z", hierarchy).isEmpty());
